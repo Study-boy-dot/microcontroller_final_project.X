@@ -22,7 +22,13 @@
 
 char mystring[20];
 int lenStr = 0;
+int wrong_time = 0;
+int timer_10_sec = 0;
 
+void check_password();
+void unlock_state();
+void button_start();
+void timer_start();
 void INTERRUPT_Initialize();
 
 void UART_Initialize() {
@@ -84,7 +90,7 @@ void MyusartRead()
     unsigned char c = RCREG;
     
     if(c == '\r'){
-        UART_Write('\n');
+//        UART_Write('\n');
 //        ClearBuffer();
 //        UART_Write(c);
         return;
@@ -105,11 +111,53 @@ void strcpy_in_uart(char *str)
     str[i] = '\0';
 }
 
+void __interrupt(high_priority) Hi_ISR(void)
+{
+    if(INT0IF == 1)
+    {
+        INT0IF = 0;
+        INT0IE = 0;
+        TMR0IF = 0;
+//        TMR0IE = 0;
+        TMR0ON = 0;
+        LED = 0;
+        UART_Write_Text("lock again\n");
+        return;
+    }
+    else if(TMR0IF == 1)
+    {
+        TMR0IF = 0;
+        ++timer_10_sec;
+        char c = timer_10_sec + '0';
+        if(c == 10 + '0')
+        {
+            UART_Write_Text("10\n");
+        }
+        else{
+        UART_Write(c);
+        UART_Write(' ');
+        }
+        if(timer_10_sec == 10)
+        {
+            timer_10_sec = 0;
+            INT0IF = 0;
+            INT0IE = 0;
+//            TMR0IE = 0;
+            TMR0ON = 0;
+            LED = 0;
+            UART_Write_Text("lock again\n");
+        }
+    } 
+    
+    // solenoid valve lock
+    return;
+}
+
 void __interrupt(low_priority)  Lo_ISR(void)
 {
     if(RCIF)
     {
-        UART_Write_Text("test");
+//        UART_Write_Text("test");
         if(RCSTAbits.OERR)
         {
             CREN = 0;
@@ -118,7 +166,7 @@ void __interrupt(low_priority)  Lo_ISR(void)
         }
         
         MyusartRead();
-        UART_Write_Text(mystring);
+//        UART_Write_Text(mystring);
 //        UART_Write_Text("test");
         RCIF = 0;
     }
@@ -132,38 +180,96 @@ void __interrupt(low_priority)  Lo_ISR(void)
 
 void main()
 {
-    OSCCON=0x72;  /* use internal oscillator frequency
+    OSCCON=0x70;  /* use internal oscillator frequency
                                  which is set to 8 MHz */
     
     UART_Initialize();
     INTERRUPT_Initialize();
     
-    char data_in;
+//    char data_in;
     TRISD = 0;  /* set PORT as output port */
     LATD = 0;
     
     __delay_ms(50);
     while(1)
     {
-        data_in = '\0';     // reset
-        data_in = mystring[0];
-        if(data_in=='1')
+//        data_in = '\0';     // reset
+//        data_in = mystring[0];
+        if(mystring[0] == 'l' && mystring[1] == 'o' && mystring[2] == 'c' && mystring[3] == 'k')
         {   
             LED = 0;  /* turn ON LED */
-            UART_Write_Text("LED OFF");  /* send LED ON status to terminal */
+            UART_Write_Text("lock state\n");  /* send LED ON status to terminal */
+            ClearBuffer();
         }
-        else if(data_in=='2')
+        else if(mystring[0] == 'u' && mystring[1] == 'n' && mystring[2] == 'l' && mystring[3] == 'o' && mystring[4] == 'c' && mystring[5] == 'k')
         {
             LED = 1;  /* turn OFF LED */
-            UART_Write_Text("LED ON");  /* send LED OFF status to terminal */
+            UART_Write_Text("unlock state\n");  /* send LED OFF status to terminal */
+            ClearBuffer();
+            check_password();
         }
-//        else
-//        {
-//            UART_Write_Text("Something wrong");  /* send msg to select proper option */
-//        }
+        else if(mystring[0] != '\0')
+        {
+            UART_Write_Text("Option lock or unlock\n");  /* send msg to select proper option */
+            ClearBuffer();
+        }
         __delay_ms(1000);
     }
     
+}
+
+void check_password()
+{
+    // check password when user press unlock
+    UART_Write_Text("What is the password:\n");
+    while(1)
+    {
+        if(wrong_time >= 3)
+        {
+            UART_Write_Text("Wrong over 3 times\n");
+            wrong_time = 0;
+            
+            ClearBuffer();
+            return;
+        }
+        
+        if(mystring[0] == '1' && mystring[1] == '2' && mystring[2] == '3' && mystring[3] == '4')
+        {
+            UART_Write_Text("Success unlock\n");
+            LED = 1;
+            wrong_time = 0;
+            button_start();
+            timer_start();
+            // solenoid valve
+            
+            ClearBuffer();
+            return;
+        }
+        else if(mystring[0] != '\0')
+        {
+            UART_Write_Text("Password wrong\n");
+            UART_Write_Text(mystring);
+            ++wrong_time;
+            ClearBuffer();
+        }
+        __delay_ms(1000);
+    }
+}
+
+void button_start()
+{
+    INT0IE = 1;
+    return;
+}
+
+void timer_start()
+{
+    timer_10_sec = 0;
+    TMR0H = 0xE1;
+    TMR0L = 0x7D;
+    TMR0IE = 1;
+    TMR0ON = 1;
+    return;
 }
 
 void INTERRUPT_Initialize()
@@ -172,4 +278,23 @@ void INTERRUPT_Initialize()
     INTCONbits.GIEH = 1;    //enable high priority interrupt
     INTCONbits.GIEL = 1;     //disable low priority interrupt
     INTCONbits.PEIE = 1;
+    
+    // button interrupt init
+    TRISBbits.RB0 = 1;
+    ADCON1 = 0x0f;
+    INTCON2 = 0x00;     // rising edge interrupt
+    INTCONbits.INT0IE = 0;
+    INTCONbits.INT0IF = 0;
+    PORTB = 0x00;
+    
+    // timer interrupt init
+    TMR0IF = 0;
+    TMR0IP = 1;     // high priority
+    TMR0IE = 1;
+    T0CON = 0x04;   // prescaler = 32;
+    // 1sec = (counter value)*Tosc*4*prescaler
+    // 1sec = 7812 * 1/8M *4 * 32
+    // 65525 +1 - 7812 = 0xE17D
+    TMR0H = 0xE1;
+    TMR0L = 0x7D;
 }
