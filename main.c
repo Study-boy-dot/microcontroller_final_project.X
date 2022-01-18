@@ -24,6 +24,9 @@ char mystring[20];
 int lenStr = 0;
 int wrong_time = 0;
 int timer_10_sec = 0;
+unsigned char state = 0;    // 0:locked 1:unlocked
+unsigned char window_state = 0; // 0:close 1:open
+unsigned char man_in_home = 0;  // 0:not in home 1: in home
 
 void check_password();
 void unlock_state();
@@ -115,13 +118,16 @@ void __interrupt(high_priority) Hi_ISR(void)
 {
     if(INT0IF == 1)
     {
+        man_in_home = 1;
         INT0IF = 0;
         INT0IE = 0;
         TMR0IF = 0;
 //        TMR0IE = 0;
         TMR0ON = 0;
         LED = 0;
-        UART_Write_Text("lock again\n");
+        LATD1 = 0;
+        UART_Write_Text("lock the door\n");
+        state = 0;
         return;
     }
     else if(TMR0IF == 1)
@@ -145,7 +151,15 @@ void __interrupt(high_priority) Hi_ISR(void)
 //            TMR0IE = 0;
             TMR0ON = 0;
             LED = 0;
-            UART_Write_Text("lock again\n");
+            LATD1 = 0;
+            UART_Write_Text("lock the door\n");
+            state = 0;
+            
+            // window close
+            LATD2 = 0;
+            window_state = 0;
+            __delay_ms(1000);
+            LATD2 = 1;
         }
     } 
     
@@ -189,24 +203,84 @@ void main()
 //    char data_in;
     TRISD = 0;  /* set PORT as output port */
     LATD = 0;
-    
+    LATD1 = 0;
+    LATD2 = 1;
     __delay_ms(50);
     while(1)
     {
+//        LATDbits.LATD2 = 1;
 //        data_in = '\0';     // reset
 //        data_in = mystring[0];
         if(mystring[0] == 'l' && mystring[1] == 'o' && mystring[2] == 'c' && mystring[3] == 'k')
         {   
-            LED = 0;  /* turn ON LED */
-            UART_Write_Text("lock state\n");  /* send LED ON status to terminal */
-            ClearBuffer();
+            if(state == 1){
+                INT0IF = 0;
+                INT0IE = 0;
+                TMR0IF = 0;
+        //        TMR0IE = 0;
+                TMR0ON = 0;
+                LATD1 = 0;
+//                UART_Write_Text("lock again\n");
+                LED = 0;  /* turn off LED */
+                UART_Write_Text("lock the door\n");  /* send LED ON status to terminal */
+                ClearBuffer();
+            }
+            else if(state == 0)
+            {
+                LED = 0;  /* turn off LED */
+                UART_Write_Text("door already locked\n");  /* send LED ON status to terminal */
+                ClearBuffer();
+            }
+            state = 0;
         }
         else if(mystring[0] == 'u' && mystring[1] == 'n' && mystring[2] == 'l' && mystring[3] == 'o' && mystring[4] == 'c' && mystring[5] == 'k')
         {
-            LED = 1;  /* turn OFF LED */
-            UART_Write_Text("unlock state\n");  /* send LED OFF status to terminal */
-            ClearBuffer();
-            check_password();
+            if(state == 0)
+            {
+                LED = 1;  /* turn on LED */
+                UART_Write_Text("unlock state\n");  /* send LED OFF status to terminal */
+                ClearBuffer();
+                check_password();
+            }
+            else if(state == 1)
+            {
+                UART_Write_Text("door already unlocked\n");
+                ClearBuffer();
+            }
+        }
+        else if(man_in_home == 1 && mystring[0] == 'c' && mystring[1] == 'l' && mystring[2] == 'o' && mystring[3] == 's' && mystring[4] == 'e')
+        {
+            if(window_state == 1)
+            {
+                UART_Write_Text("Close window\n");
+                ClearBuffer();
+                LATD2 = 0;
+                window_state = 0;
+                __delay_ms(1000);
+                LATD2 = 1;
+            }
+            else if(window_state == 0)
+            {
+                UART_Write_Text("Window already closed\n");
+                ClearBuffer();
+            }
+        }
+        else if(man_in_home == 1 && mystring[0] == 'o' && mystring[1] == 'p' && mystring[2] == 'e' && mystring[3] == 'n')
+        {
+            if(window_state == 1)
+            {
+                UART_Write_Text("Window already opened\n");
+                ClearBuffer();
+            }
+            else if(window_state == 0)
+            {
+                UART_Write_Text("Open window\n");
+                LATD2 = 0;
+                window_state = 1;
+                __delay_ms(1000);
+                LATD2 = 1;
+                ClearBuffer();
+            }
         }
         else if(mystring[0] != '\0')
         {
@@ -226,31 +300,41 @@ void check_password()
     {
         if(wrong_time >= 3)
         {
+            ClearBuffer();
             UART_Write_Text("Wrong over 3 times\n");
             wrong_time = 0;
-            
-            ClearBuffer();
             return;
         }
         
         if(mystring[0] == '1' && mystring[1] == '2' && mystring[2] == '3' && mystring[3] == '4')
         {
+            ClearBuffer();
             UART_Write_Text("Success unlock\n");
+            state = 1;
             LED = 1;
+            
+            
             wrong_time = 0;
             button_start();
             timer_start();
             // solenoid valve
+            LATD1 = 1;
             
-            ClearBuffer();
+            if(window_state == 0)
+            {
+                LATD2 = 0;
+                window_state = 1;
+                __delay_ms(1000);
+                LATD2 = 1;
+            }
             return;
         }
         else if(mystring[0] != '\0')
         {
+            ClearBuffer();
             UART_Write_Text("Password wrong\n");
             UART_Write_Text(mystring);
             ++wrong_time;
-            ClearBuffer();
         }
         __delay_ms(1000);
     }
@@ -292,6 +376,7 @@ void INTERRUPT_Initialize()
     TMR0IP = 1;     // high priority
     TMR0IE = 1;
     T0CON = 0x04;   // prescaler = 32;
+    // some problem, equation not correct
     // 1sec = (counter value)*Tosc*4*prescaler
     // 1sec = 7812 * 1/8M *4 * 32
     // 65525 +1 - 7812 = 0xE17D
